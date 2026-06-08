@@ -166,6 +166,34 @@ backend is a different model at high effort: codex `gpt-5.5` @ `xhigh`, cursor
 (e.g. `codexCmd(p, { model:'gpt-5.3-codex-spark', effort:'low' })`). The opencode
 id is machine-specific; run `opencode models` to confirm or repoint it.
 
+## Raw LLM endpoint backend (`llm-endpoint`)
+
+A fourth, different kind of backend: a **raw OpenAI-/Anthropic-compatible HTTP
+endpoint** (the companion **`llm-endpoint`** skill), for hitting an arbitrary
+model behind a gateway/router/proxy. Key difference: **it is a single model call,
+not an agent** — it can't run `git diff`, read files, or explore the repo. So you
+must **feed it the context** (put it in the prompt, or pipe it in). The base URL
+and API key come from local config (`~/.config/llm-endpoint/env`) — never
+hardcoded, so workflow scripts that use it stay safe to commit.
+
+`delegate.js` ships `llmCmd()`:
+
+```js
+// pure prompt (context already inside it)
+agent(delegate(llmCmd("Assess this design: …", { model: 'provider/model' })),
+      { agentType:'general-purpose', label:'llm' })
+
+// review the diff — gather context via opts.pipe (it isn't an agent, so YOU pipe it)
+agent(delegate(llmCmd("Review this diff for bugs; cite file:line.", { pipe: 'git diff; git diff --staged' })),
+      { agentType:'general-purpose', label:'llm', phase:'Panel' })
+```
+
+`model`/`kind` (`chat` → `/chat/completions`, `messages` → `/messages`) fall back
+to the config defaults if omitted. Use this backend when you want a specific model
+that's only reachable through the gateway, or a cheap/fast extra opinion; reach
+for the CLI backends instead when the step needs real repo exploration or edits.
+The example workflow includes it as an optional reviewer (it pipes the diff in).
+
 ## Writes & isolation (parallel implementation fan-out)
 
 For a panel that only *reads* (review, plan, second opinion) no isolation is
@@ -279,6 +307,10 @@ reflexively use one. Match the team to the task:
   `deepseek-v4-pro` @ max** (both high-effort reasoners) — or both, and compare.
 - **Cost-sensitive** → fewer agents + lighter settings (`codexCmd(p, {
   model:'gpt-5.3-codex-spark', effort:'low' })`, opencode `--variant minimal`).
+- **A model only reachable via your gateway/router, or a cheap extra opinion over
+  context you already have** → **`llmCmd`** (the `llm-endpoint` backend). It's a
+  raw call, not an agent — feed it the context (use `opts.pipe`), and don't pick it
+  for steps that need repo exploration or edits.
 
 Rule of thumb: **more backends = more coverage but more cost/latency.** Scale the
 roster to how much the answer matters. To change it, just add/remove the

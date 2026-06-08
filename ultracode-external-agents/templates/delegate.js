@@ -110,11 +110,32 @@ function opencodeCmd(prompt, opts = {}) {
   return c;
 }
 
+// ── LLM ENDPOINT (raw OpenAI-/Anthropic-compatible model call — NOT an agent) ──
+// Calls the `llm-endpoint` skill's script, which reads the base URL + key from
+// local config (~/.config/llm-endpoint/env) — never hardcoded here. Unlike the
+// CLI backends this does NOT explore files or run tools; it's ONE completion, so
+// put the context in the prompt, or pipe it via opts.pipe.
+//   model:  optional (falls back to LLM_ENDPOINT_MODEL in config)
+//   kind:   'chat' | 'messages' (omit to use LLM_ENDPOINT_KIND from config)
+//   system: optional system prompt
+//   pipe:   optional shell snippet whose stdout is piped in as extra context
+//           (e.g. 'git diff') — appended after the prompt
+function llmCmd(prompt, opts = {}) {
+  const S = '"$HOME/.claude/skills/llm-endpoint/scripts/llm-call.sh"';
+  let f = "";
+  if (opts.kind)   f += ` --kind ${opts.kind}`;
+  if (opts.model)  f += ` --model ${sh(opts.model)}`;
+  if (opts.system) f += ` --system ${sh(opts.system)}`;
+  if (opts.pipe)   return `{ printf '%s\\n\\n' ${sh(prompt)}; ${opts.pipe}; } | ${S}${f}`;
+  return `${S}${f} ${sh(prompt)}`;
+}
+
 // ── Convenience: pick a backend by name ────────────────────────────────────
 // const cmd = backend('codex', "review this diff", { effort: 'high' })
 function backend(name, prompt, opts = {}) {
   if (name === "codex")    return codexCmd(prompt, opts);
   if (name === "cursor")   return cursorCmd(prompt, opts);
   if (name === "opencode") return opencodeCmd(prompt, opts);
+  if (name === "llm")      return llmCmd(prompt, opts);
   throw new Error(`unknown backend: ${name}`);
 }

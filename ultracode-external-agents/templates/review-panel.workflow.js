@@ -1,19 +1,20 @@
 // Example ultracode workflow: a MULTI-MODEL code-review panel.
 //
-// Reviews the current uncommitted git diff with codex, cursor, and opencode in
-// parallel — each a genuinely different model giving an independent read-only
-// review — then a Claude agent reconciles them into one deduplicated report.
-// Agreement across reviewers => higher confidence.
+// Reviews the current uncommitted git diff with codex, cursor, opencode, and an
+// optional raw LLM endpoint (the llm-endpoint skill) in parallel — each a
+// genuinely different model giving an independent read-only review — then a
+// Claude agent reconciles them into one deduplicated report. Agreement across
+// reviewers => higher confidence.
 //
 // Run it with the Workflow tool:  Workflow({ scriptPath: "<this file>" })
 // or paste the whole thing as the `script` argument.
 
 export const meta = {
   name: 'external-review-panel',
-  description: 'Review the current git diff with codex + cursor + opencode in parallel, then reconcile with Claude',
+  description: 'Review the current git diff with codex + cursor + opencode + an optional LLM endpoint in parallel, then reconcile with Claude',
   phases: [
-    { title: 'Preflight', detail: 'detect which external CLIs are installed' },
-    { title: 'Panel',     detail: 'each external agent reviews the diff read-only' },
+    { title: 'Preflight', detail: 'detect which review backends are available' },
+    { title: 'Panel',     detail: 'each backend reviews the diff read-only' },
     { title: 'Reconcile', detail: 'Claude merges findings into one report' },
   ],
 }
@@ -35,6 +36,8 @@ function delegate(cmd) {
 function codexCmd(p, o = {})    { return `codex exec ${sh(p)} -s ${o.mode || "read-only"} -m ${o.model || "gpt-5.5"} -c model_reasoning_effort=${o.effort || "xhigh"} < /dev/null`; }
 function cursorCmd(p, o = {})   { const m = o.mode === undefined ? "ask" : o.mode; let c = `cursor-agent -p --trust`; if (m) c += ` --mode ${m}`; c += ` --model ${o.model || "composer-2.5"}`; return c + ` ${sh(p)}`; } // cursor has no effort flag; mode:null/'' → write
 function opencodeCmd(p, o = {}) { return `opencode run ${sh(p)} --agent ${o.agent || "plan"} -m ${o.model || "opencode-go/deepseek-v4-pro"} --variant ${o.variant || "max"}`; }
+// llm-endpoint is a raw model call (not an agent), so we gather the diff and pipe it in. Model/kind come from local config.
+function llmReviewCmd(instr) { return `{ printf '%s\\n\\n' ${sh(instr)}; git diff; git diff --staged; } | "$HOME/.claude/skills/llm-endpoint/scripts/llm-call.sh"`; }
 
 const REVIEW =
   "Review the uncommitted changes in this repo for correctness bugs and risky " +
@@ -45,14 +48,15 @@ const REVIEW =
 // ── Phase 1: preflight — only include CLIs that are actually installed ───────
 phase('Preflight')
 const AVAIL = { type: 'object', additionalProperties: false,
-  properties: { codex: { type: 'boolean' }, cursor: { type: 'boolean' }, opencode: { type: 'boolean' } },
-  required: ['codex', 'cursor', 'opencode'] }
+  properties: { codex: { type: 'boolean' }, cursor: { type: 'boolean' }, opencode: { type: 'boolean' }, llm: { type: 'boolean' } },
+  required: ['codex', 'cursor', 'opencode', 'llm'] }
 const avail = await agent(
-  "Check which external coding CLIs are installed by running, separately: " +
-  "`command -v codex`, `command -v cursor-agent`, `command -v opencode`. " +
-  "Report true for each one that resolves to a path.",
+  "Check which review backends are available by running, separately: " +
+  "`command -v codex`, `command -v cursor-agent`, `command -v opencode`, and for the raw LLM endpoint " +
+  "`test -x \"$HOME/.claude/skills/llm-endpoint/scripts/llm-call.sh\" && test -f \"$HOME/.config/llm-endpoint/env\" && echo yes`. " +
+  "Report codex/cursor/opencode true if the command resolves to a path; report llm true only if that test prints 'yes'.",
   { label: 'preflight', phase: 'Preflight', schema: AVAIL, agentType: 'general-purpose' }
-) || { codex: false, cursor: false, opencode: false }; // fail CLOSED: if preflight fails, assume nothing is installed
+) || { codex: false, cursor: false, opencode: false, llm: false }; // fail CLOSED: if preflight fails, assume nothing is available
 
 const roster = [];
 // The roster is a per-task DECISION (see SKILL.md "Choosing the roster"): add or
@@ -60,8 +64,9 @@ const roster = [];
 // panel — three different models: gpt-5.5 / composer-2.5 / deepseek-v4-pro.
 if (avail.codex)    roster.push({ name: 'codex',    cmd: codexCmd(REVIEW) });    // gpt-5.5 @ xhigh
 if (avail.cursor)   roster.push({ name: 'cursor',   cmd: cursorCmd(REVIEW) });   // composer-2.5
-if (avail.opencode) roster.push({ name: 'opencode', cmd: opencodeCmd(REVIEW) }); // deepseek-v4-pro @ max
-log(`Review panel: ${roster.map(r => r.name).join(', ') || '(no external CLIs found)'}`);
+if (avail.opencode) roster.push({ name: 'opencode',     cmd: opencodeCmd(REVIEW) });  // deepseek-v4-pro @ max
+if (avail.llm)      roster.push({ name: 'llm-endpoint', cmd: llmReviewCmd(REVIEW) }); // configured model (e.g. via /messages)
+log(`Review panel: ${roster.map(r => r.name).join(', ') || '(no backends available)'}`);
 
 // ── Phase 2: panel — run all reviewers concurrently ─────────────────────────
 // parallel() is the right call here (a true barrier): Reconcile needs ALL the
@@ -72,7 +77,7 @@ const reviews = (await parallel(roster.map(r => () =>
     .then(text => text && { reviewer: r.name, text })
 ))).filter(Boolean);
 
-if (!reviews.length) return "No external reviewers were available — install codex, cursor-agent, or opencode.";
+if (!reviews.length) return "No review backends were available — install codex, cursor-agent, or opencode, or configure the llm-endpoint skill.";
 
 // ── Phase 3: reconcile — Claude merges the independent reviews ───────────────
 phase('Reconcile')
