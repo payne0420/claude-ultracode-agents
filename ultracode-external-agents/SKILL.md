@@ -3,10 +3,11 @@ name: ultracode-external-agents
 description: >-
   Author ultracode workflows whose agent() steps are executed by an EXTERNAL
   coding CLI — OpenAI Codex, Cursor, or opencode — instead of (or alongside)
-  regular Claude subagents. Use this when building a Workflow and you want some
-  or all of its agents to run on a different model/provider: multi-model review
-  or design panels, an independent second opinion inside a pipeline, off-budget
-  heavy implementation, or genuine model diversity in a fan-out. Explains the
+  regular Claude subagents. Use this to run an individual agent() step on a
+  different model/provider; that one bridged step drops into ANY workflow shape —
+  a single second-opinion step in a pipeline, one off-budget implementation step,
+  a design probe, or (when you want disagreement) a fan-out panel. The shape is
+  the Workflow tool's job; this skill only changes what one agent() runs on. Explains the
   bridge (a thin Claude adapter shells out to the CLI), gives copy-paste
   delegation helpers, per-backend invocation recipes, structured-output mapping,
   worktree isolation for parallel writes, and a full runnable example workflow.
@@ -24,9 +25,11 @@ description: >-
 
 This skill is for **authoring `Workflow` scripts** in which some `agent()` steps
 run on an external coding CLI (`codex exec`, `cursor-agent -p`, `opencode run`)
-rather than on Claude. The payoff is real **model diversity**: a review or design
-panel where each member is a different model, an independent second opinion inside
-a deterministic pipeline, or heavy implementation done by another agent.
+rather than on Claude. The payoff is being able to put another model behind **any
+one `agent()` step** — an independent second opinion in a pipeline, an off-budget
+implementation step, a design probe — and, when the task genuinely calls for
+disagreement, a multi-model panel. The orchestration shape is unchanged; only the
+backend of a step changes.
 
 > Prerequisite: the workflow turn must be opted into ultracode / the `Workflow`
 > tool (the user says "ultracode", or asks for a workflow). This skill shapes
@@ -39,8 +42,10 @@ background. Its building blocks:
 
 - `agent(prompt, opts)` — spawn **one Claude subagent**; returns its final text,
   or a validated object if you pass `opts.schema`.
-- `parallel(thunks)` — barrier: run all concurrently, await all.
-- `pipeline(items, ...stages)` — per-item staged, no barrier (the default).
+- `pipeline(items, ...stages)` — per-item staged, no barrier (the default). Most
+  workflows are a pipeline.
+- `parallel(thunks)` — barrier: run all concurrently, await all. Reach for it only
+  when you genuinely need several independent results at once (e.g. a disagreement panel).
 - `phase()`, `log()`, `args`, `budget`, `workflow()`.
 
 Two hard facts decide the whole design:
@@ -200,11 +205,13 @@ The example workflow includes it as an optional reviewer (it pipes the diff in).
 > file-accurate `file:line` refs, also include the file contents, or let a CLI
 > backend (which reads the file itself) own the line-numbered findings.
 
-## Writes & isolation (parallel implementation fan-out)
+## Writes & isolation
 
-For a panel that only *reads* (review, plan, second opinion) no isolation is
-needed — run them all in `parallel()`. If multiple external agents **write files
-concurrently** they will clobber each other. Two ways to isolate:
+For **one** external agent writing files — the common case — no isolation is
+needed: run it in `workspace-write` and review its diff like any delegated work.
+Isolation is a concurrency-safety mechanism, not an invitation to fan out: it only
+matters when *multiple* external agents **write files concurrently**, because they
+will clobber each other. Two ways to isolate:
 
 - **Workflow-level:** give the `agent()` call `isolation: 'worktree'` — the Claude
   adapter (and thus the CLI it launches) runs in its own git worktree.
@@ -225,9 +232,17 @@ concurrently** they will clobber each other. Two ways to isolate:
 - **CLI-level:** `cursor-agent -w <name>` (own worktree) or codex `-C <dir>
   --add-dir <dir>` to scope writes.
 
-**Parallel write fan-out** — give each agent its own worktree so they can't
-collide (without `isolation`, parallel writers in the same tree corrupt each
-other's edits):
+**One delegated implementation** — call it once; no isolation needed if it's the
+only writer:
+
+```js
+const impl = await agent(delegate(codexCmd("Add input validation to the /signup handler + a unit test.", { mode:'workspace-write' })),
+  { agentType:'general-purpose', label:'impl' });
+```
+
+**Parallel write fan-out** — ONLY when you have several independent tasks that
+should run concurrently. Then each needs its own worktree (without `isolation`,
+parallel writers in the same tree corrupt each other's edits):
 
 ```js
 const tasks = [
@@ -286,7 +301,12 @@ the background process exits and notifies you — the same long-task pattern the
 `codex-exec` / `cursor-agent` / `opencode` skills use. Or split the work into
 smaller delegated steps so no single call approaches the limit.
 
-## Full example
+## Example: a panel (one of several shapes)
+
+The minimal form is a single bridged step — `const r = await
+agent(delegate(codexCmd(REVIEW)), { agentType:'general-purpose' })` standing
+alone. The template below extends that into a *panel* (one shape among several —
+see *Choosing the orchestration shape*); it is one illustration, not the default.
 
 `templates/review-panel.workflow.js` is a complete, runnable workflow: it
 preflights which CLIs are installed, runs a **codex + cursor + opencode** review
@@ -309,18 +329,87 @@ reconciliation, schema shaping, routing — and any step that needs the workflow
 own context. A good workflow usually *mixes* both: external agents generate
 diverse raw work; Claude agents structure and reconcile it.
 
-## Choosing the roster (per task) — Claude decides
+## Choosing the orchestration shape (per task)
 
-**The roster is a decision you (Claude) make per task, not a fixed default.** When
-you author or adapt a workflow from this skill, pick which backends to include —
-and how many — based on what the job needs. Don't reflexively use all three; don't
-reflexively use one. Match the team to the task:
+**The bridge is orchestration-agnostic.** It only changes what *one* `agent()`
+step runs on (an external model instead of Claude); it says nothing about how many
+steps there are or how they're wired. The *shape* is the `Workflow` tool's job —
+and most workflows are a **pipeline or a single step, not a fan-out**. Decide the
+shape from the task, then bridge whichever steps you want onto another model.
+**Don't reach for a multi-model panel by default — the review-panel example is just
+ONE illustration of ONE shape.** A short menu (the snippet bridges the external
+work; reconcile/glue stays Claude):
 
-- **Want disagreement / coverage** (code review, design choice, "is this
-  correct?") → include **all installed** backends. Different models catch
-  different things — that's the entire point of a panel. (The example does this.)
+- **Single call** — one independent read from another model; no staging, no panel.
+  ```js
+  const op = await agent(delegate(codexCmd("Second opinion: is this lock-free queue correct? Run git diff yourself.", { effort:'low' })), { agentType:'general-purpose', label:'codex' });
+  ```
+- **Pipeline** *(the Workflow default)* — each item flows through ordered stages,
+  no barrier; use when items are independent and stages differ.
+  ```js
+  await pipeline(files,
+    f => agent(delegate(codexCmd(`Propose a fix for ${f}; output a unified diff only.`)), { agentType:'general-purpose', label:`fix:${f}` }),
+    draft => agent(`Tighten and de-risk this patch, keep it minimal:\n${draft}`, { label:'refine' }));
+  ```
+- **Fan-out** — same task, several backends at once for diversity/coverage; the
+  barrier lets a later step see all results. Use only when you want disagreement.
+  ```js
+  const outs = await parallel(['codex','cursor','opencode'].map(n => () => agent(delegate(backend(n, REVIEW)), { agentType:'general-purpose', label:`r:${n}` })));
+  ```
+- **Loop-until-dry** — iterate a delegated find-and-fix until the agent reports
+  nothing left (with a max-iteration cap).
+  ```js
+  let left = true, i = 0;
+  while (left && i++ < 5) { const r = await agent(delegate(codexCmd("Find ONE remaining bug in the diff; if none, reply exactly DONE.")), { agentType:'general-purpose', label:`pass:${i}` }); left = !/^\s*DONE\s*$/.test(r); }
+  ```
+- **Judge panel + synthesis** — several models produce reviews, then a Claude step
+  reconciles/dedupes; cross-model agreement signals confidence. (The flagship example.)
+  ```js
+  const reviews = await parallel(roster.map(r => () => agent(delegate(r.cmd), { agentType:'general-purpose', label:r.name })));
+  const report = await agent("Merge these reviews, note cross-reviewer agreement:\n" + reviews.join('\n---\n'), { label:'reconcile' });
+  ```
+- **Adversarial verify (N skeptics)** — propose a claim, tell N models to attack it
+  and only report a real flaw; surviving claims are trustworthy.
+  ```js
+  const attacks = await parallel(['codex','opencode','cursor'].map(n => () => agent(delegate(backend(n, `Try to BREAK this claim; cite a concrete counterexample or reply NO-FLAW:\n${claim}`)), { agentType:'general-purpose', label:`skeptic:${n}` })));
+  const verdict = await agent(`Did any skeptic find a real flaw?\n${attacks.join('\n')}`, { label:'verdict' });
+  ```
+- **Map-reduce** — split a big job into chunks, delegate each (map, in parallel),
+  then a Claude step folds the partials (reduce).
+  ```js
+  const parts = await parallel(chunks.map((c,i) => () => agent(delegate(opencodeCmd(`Summarize the risks in this module:\n${c}`)), { agentType:'general-purpose', label:`map:${i}` })));
+  const whole = await agent("Combine these per-module risk notes into one ranked list:\n" + parts.join('\n'), { label:'reduce' });
+  ```
+- **Nested sub-workflow** — factor a reusable external-agent routine into its own
+  `workflow()` and invoke it per item.
+  ```js
+  const panel = workflow(async (diffRef) => { const rs = await parallel(['codex','cursor'].map(n => () => agent(delegate(backend(n, `Review ${diffRef}`)), { agentType:'general-purpose' }))); return agent("Reconcile:\n" + rs.join('\n')); });
+  for (const pr of prs) await panel(pr);
+  ```
+
+**Caution:** don't default to fan-out. `pipeline()` is the Workflow default; a
+single bridged step is the common case; `parallel()` panels are for when the task
+specifically needs several independent results at once (disagreement, coverage,
+map-reduce). Pick the shape the task needs.
+
+## Choosing the shape and backend(s) — Claude decides
+
+**First decide the SHAPE** (the Workflow tool's job — see *Choosing the
+orchestration shape*): is this one delegated step, a step inside a pipeline, or a
+fan-out where you want disagreement? Most tasks are one step. Only pick a
+multi-backend panel when you specifically want cross-model disagreement/coverage.
+
+**THEN, for whatever steps you delegate, choose the backend per step.** The roster
+is a decision you (Claude) make per task, not a fixed default. Don't reflexively
+use all three; don't reflexively use one. Match the backend(s) to the task:
+
 - **One quick second opinion** → pick **a single** backend (the cheapest that
-  fits). Spinning up three for a small question is waste.
+  fits). This is the common case; spinning up three for a small question is waste.
+- **Want disagreement / coverage AND the answer is high-stakes enough to justify
+  the cost** (code review, design choice, "is this correct?") → include **multiple
+  installed** backends. Different models catch different things — that's the point
+  of a panel. For routine reviews, one strong backend is usually enough. (The
+  panel example illustrates the multi-backend form.)
 - **Hard read-only guarantee on risky/untrusted code** → prefer **codex**: its
   `-s read-only` is an OS-enforced sandbox (physically can't write or reach the
   network). cursor `--mode ask` / opencode `--agent plan` are reliable but not
