@@ -225,6 +225,26 @@ concurrently** they will clobber each other. Two ways to isolate:
 - **CLI-level:** `cursor-agent -w <name>` (own worktree) or codex `-C <dir>
   --add-dir <dir>` to scope writes.
 
+**Parallel write fan-out** — give each agent its own worktree so they can't
+collide (without `isolation`, parallel writers in the same tree corrupt each
+other's edits):
+
+```js
+const tasks = [
+  "Add input validation to the /signup handler + a unit test.",
+  "Add a rate limiter to the /login handler + a unit test.",
+  "Convert the config loader to async + update its callers.",
+];
+const results = await parallel(tasks.map((t, i) => () =>
+  agent(delegate(codexCmd(t, { mode:'workspace-write' })),       // or cursorCmd(t,{mode:null}) / opencodeCmd(t,{agent:'build'})
+        { isolation:'worktree', agentType:'general-purpose', label:`impl:${i}` })
+));
+// each change lands in its own worktree/branch — review and merge them separately.
+```
+
+Mix backends across the fan-out for diversity, and remember the base-ref note
+above (set `worktree.baseRef: 'head'` if each agent must build on local work).
+
 Each external agent's edits are just changes in a working tree — review the diff
 before trusting them, same as any delegated work.
 
