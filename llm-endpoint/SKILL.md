@@ -105,8 +105,18 @@ pipe `git diff` in. See that skill's "Raw LLM endpoint backend" section.
   or paste the context.
 - **Secrets are local-only.** Never hardcode or commit the URL/key; they belong in
   `~/.config/llm-endpoint/env`.
-- **`chat` vs `messages` per model.** A router may serve a given model on only one
-  shape; the other can return `502`/`404`. If one fails, try the other (set the
-  working one as `LLM_ENDPOINT_KIND`).
+- **`chat` vs `messages` per model.** A gateway may serve a given model on only
+  one shape — if one returns an error, try the other and set `LLM_ENDPOINT_KIND`.
+  The chat path sends `"stream": false` because some gateways stream SSE by default
+  (which can't be parsed as a single object — and a *streaming* failure can even
+  surface as a `502 stream_early_eof` that non-streaming avoids). The script still
+  falls back to reassembling SSE if a gateway streams anyway.
+- **Reasoning/"thinking" models + `--max-tokens`.** Models that emit a hidden
+  thinking block spend the token budget on reasoning first; a *low* `--max-tokens`
+  can be consumed entirely by thinking (`stop_reason: length`), leaving the answer
+  text empty. Raise `--max-tokens` (default 1024) if a reasoning model returns
+  nothing. The script returns only the final answer text, not the thinking.
+- **HTTP errors are surfaced.** A non-2xx response prints `HTTP <code>` plus the
+  error body to stderr and exits non-zero (instead of silently returning empty).
 - **Needs `curl` and `jq`.**
 - **Don't leak secrets** into prompts — you're sending them to a third-party model.
