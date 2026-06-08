@@ -39,11 +39,18 @@ function opencodeCmd(p, o = {}) { return `opencode run ${sh(p)} --agent ${o.agen
 // llm-endpoint is a raw model call (not an agent), so we gather the diff and pipe it in. Model/kind come from local config.
 function llmReviewCmd(instr) { return `{ printf '%s\\n\\n' ${sh(instr)}; git diff; git diff --staged; } | "$HOME/.claude/skills/llm-endpoint/scripts/llm-call.sh"`; }
 
+// Verified-live caveats for this panel:
+//  - cursor `--mode ask` may block shell/git in some envs; it then reviews the
+//    working tree directly (still works). The llm backend can't run git at all,
+//    so llmReviewCmd pipes the diff in for it.
+//  - the llm reviewer's line numbers are diff-relative (it sees the diff text,
+//    not the file), so they can be offset from real file line numbers.
 const REVIEW =
   "Review the uncommitted changes in this repo for correctness bugs and risky " +
-  "edge cases. Run `git diff` yourself (and `git diff --staged`). For each " +
-  "finding give file:line, quote the offending line, and explain the bug in one " +
-  "or two sentences. Be concise; skip style nits.";
+  "edge cases. Run `git diff` yourself (and `git diff --staged`); if your shell " +
+  "is blocked, review the modified working-tree files directly. For each finding " +
+  "give file:line, quote the offending line, and explain the bug in one or two " +
+  "sentences. Be concise; skip style nits.";
 
 // ── Phase 1: preflight — only include CLIs that are actually installed ───────
 phase('Preflight')

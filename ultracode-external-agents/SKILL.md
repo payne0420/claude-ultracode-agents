@@ -154,7 +154,7 @@ one, **load its dedicated skill with the Skill tool** (`codex-exec`,
 | Pick model | `-m gpt-5.5` *(helper default)*; `-m gpt-5.3-codex-spark` (light) | `--model composer-2.5` *(helper default)*; `*-thinking` variants for more reasoning | `-m opencode-go/deepseek-v4-pro` *(helper default; ids machine-specific)* |
 | Effort | `-c model_reasoning_effort=xhigh` *(helper default)*; `…=low` for cheap | **none** — no effort flag; reasoning is baked into the model (`*-thinking`) | `--variant max` *(helper default)*; `minimal`/`high` otherwise |
 | Clean machine output | `--json` / `-o file` / `--output-schema` | `--output-format json \| jq -r .result` | `--format json \| jq -rs 'map(select(.type=="text").part.text)\|join("")'` |
-| **Must-know gotcha** | **close stdin** (`< /dev/null`) or it hangs forever; needs a git repo (`--skip-git-repo-check` otherwise) | **`-p` + `--trust` mandatory**; **stdin is ignored** — embed context or tell it to run git; `--plan` is only *soft* read-only (**observed editing when pushed** — vendor `--help` wrongly labels it "no edits"); use `--mode ask` for a hard guard | **pin `-m`** or you get a router/free model — and there is **no universal model id** (`opencode models` differs per machine; don't assume `anthropic/claude-opus-4-8` exists); headless **auto-rejects** `ask`-perms (doesn't hang) |
+| **Must-know gotcha** | **close stdin** (`< /dev/null`) or it hangs forever; needs a git repo (`--skip-git-repo-check` otherwise) | **`-p` + `--trust` mandatory**; **stdin is ignored** — embed context or tell it to run git; `--plan` is only *soft* read-only (**observed editing when pushed** — vendor `--help` wrongly labels it "no edits"); use `--mode ask` for a hard guard, but note ask-mode may **block shell/`git`** in some envs (it falls back to reading the working tree) — for a diff review, prefer piping the diff in over telling it to run `git diff` | **pin `-m`** or you get a router/free model — and there is **no universal model id** (`opencode models` differs per machine; don't assume `anthropic/claude-opus-4-8` exists); headless **auto-rejects** `ask`-perms (doesn't hang) |
 
 Default to **read-only** modes for panels/reviews/second-opinions; escalate to
 write modes only for delegated implementation, and say so.
@@ -193,6 +193,12 @@ to the config defaults if omitted. Use this backend when you want a specific mod
 that's only reachable through the gateway, or a cheap/fast extra opinion; reach
 for the CLI backends instead when the step needs real repo exploration or edits.
 The example workflow includes it as an optional reviewer (it pipes the diff in).
+
+> **Note (verified live):** because you pipe the raw `git diff` in, the model's
+> line references are **diff-relative** — they can be offset from the real file
+> line numbers (e.g. by the hunk header + context lines). If you need
+> file-accurate `file:line` refs, also include the file contents, or let a CLI
+> backend (which reads the file itself) own the line-numbered findings.
 
 ## Writes & isolation (parallel implementation fan-out)
 
